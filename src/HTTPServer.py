@@ -30,6 +30,8 @@ from .config import (
     logger_tts,
 )
 
+from .llm_routing import catalog, select_models, TIERS
+
 from .ComfyUIClient import ComfyUIError
 
 STT_MANAGER = STTManager()
@@ -231,7 +233,7 @@ class HTTPServer(BaseHTTPRequestHandler):
 
         return self.rfile.read(content_length)
 
-    def _read_body(self) -> bytes | None:
+    def _read_body(self) -> dict | None:
         transfer_encoding = self.headers.get("Transfer-Encoding", "").lower()
 
         # aiohttp/Open WebUI may stream multipart file uploads using HTTP chunked
@@ -266,7 +268,7 @@ class HTTPServer(BaseHTTPRequestHandler):
                             f"Request body exceeds the configured limit of {OPENAI_COMPAT_MAX_UPLOAD_BYTES} bytes.",
                             error_type="request_too_large",
                         )
-                        return {}
+                        return None
 
                     chunk = self.rfile.read(chunk_size)
                     if len(chunk) != chunk_size:
@@ -286,22 +288,22 @@ class HTTPServer(BaseHTTPRequestHandler):
 
             except (ValueError, OSError) as exc:
                 self.send_openai_error(400, f"Invalid chunked request body: {exc}")
-                return {}
+                return None
 
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             self.send_openai_error(411, "Content-Length header is required.")
-            return {}
+            return None
 
         try:
             content_length = int(raw_length)
         except ValueError:
             self.send_openai_error(400, "Invalid Content-Length header.")
-            return {}
+            return None
 
         if content_length < 0:
             self.send_openai_error(400, "Invalid Content-Length header.")
-            return {}
+            return None
 
         if content_length > OPENAI_COMPAT_MAX_UPLOAD_BYTES:
             self.send_openai_error(
@@ -309,7 +311,7 @@ class HTTPServer(BaseHTTPRequestHandler):
                 f"Request body exceeds the configured limit of {OPENAI_COMPAT_MAX_UPLOAD_BYTES} bytes.",
                 error_type="request_too_large",
             )
-            return {}
+            return None
 
         data = self.rfile.read(content_length)
         payload = json.loads(data.decode("utf-8"))
@@ -467,6 +469,7 @@ class HTTPServer(BaseHTTPRequestHandler):
                 logging.info("[IMAGE] Requisição de listagem de modelos recebida.")
                 models = (
                     TTS_MANAGER.models() + STT_MANAGER.models() + ICE_MANAGER.models()
+                    + tuple(TIERS) + tuple(dict.fromkeys(m.model for m in catalog()))
                 )
                 self.send_json(
                     200,
@@ -661,6 +664,82 @@ class HTTPServer(BaseHTTPRequestHandler):
 
         self.send_json(404, {"ok": False, "error": "Endpoint inexistente."})
 
+    def _chat_completion(self, body):
+        # do_POST has already read the request body. Never read rfile twice.
+        if body is None:
+            return
+        try:
+            data = body
+            if not isinstance(data, dict):
+                raise ValueError("O corpo JSON deve ser um objeto.")
+            messages = data.get("messages")
+            if not isinstance(messages, list) or not messages or any(
+                not isinstance(message, dict) or not isinstance(message.get("role"), str)
+                for message in messages
+            ):
+                raise ValueError("messages deve ser uma lista não vazia de mensagens com role.")
+            model = data.get("model")
+            if model is not None and not isinstance(model, str):
+                raise ValueError("model deve ser texto.")
+            if not select_models(model):
+                raise ValueError("O seletor LLM não selecionou nenhum modelo configurado.")
+            stream = data.get("stream", False)
+            if not isinstance(stream, bool):
+                raise ValueError("stream deve ser booleano.")
+            # Routing and credentials are owned by PIA, never request parameters.
+            allowed = ("temperature", "top_p", "max_tokens", "max_completion_tokens",
+                       "stop", "presence_penalty", "frequency_penalty", "seed", "n",
+                       "tools", "tool_choice", "parallel_tool_calls", "response_format",
+                       "stream_options", "user", "logprobs", "top_logprobs")
+            options = {key: data[key] for key in allowed if key in data}
+        except (UnicodeDecodeError, ValueError, TypeError) as exc:
+            self.send_openai_error(400, str(exc))
+            return
+
+        manager = BUFFER_MANAGER.agent_manager
+        if not stream:
+            try:
+                response = manager.complete(messages, model=model, **options)
+                self.send_json(200, response.model_dump(exclude_none=True))
+            except Exception:
+                logging.exception("[LLM] Todos os candidatos falharam.")
+                self.send_openai_error(503, "Nenhum modelo LLM selecionado está disponível.", error_type="server_error")
+            return
+
+        iterator = manager.complete_stream(messages, model=model, **options)
+        started = False
+        try:
+            # Resolve fallback before committing a successful HTTP response.
+            first = next(iterator)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            started = True
+            def send_chunk(chunk):
+                payload = json.dumps(chunk.model_dump(exclude_none=True), ensure_ascii=False)
+                self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            send_chunk(first)
+            for chunk in iterator:
+                send_chunk(chunk)
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception:
+            logging.exception("[LLM] Falha no stream.")
+            if started:
+                error = {"error": {"message": "Falha no modelo durante o stream.", "type": "server_error"}}
+                self.wfile.write(f"data: {json.dumps(error)}\n\ndata: [DONE]\n\n".encode("utf-8"))
+                self.wfile.flush()
+            else:
+                self.send_openai_error(503, "Nenhum modelo LLM selecionado está disponível.", error_type="server_error")
+        finally:
+            iterator.close()
+
     def do_POST(self) -> None:
         try:
             path = self._path()
@@ -805,6 +884,8 @@ class HTTPServer(BaseHTTPRequestHandler):
                 return
 
             body = self._read_body()
+            if body is None:
+                return
 
             # ======================================================================
             # OpenAI-compatible
@@ -1176,135 +1257,7 @@ class HTTPServer(BaseHTTPRequestHandler):
                     return
 
                 if path == "/v1/chat/completions":
-                    try:
-                        data = body if isinstance(body, dict) else {}
-                        raw_body = json.dumps(data, ensure_ascii=False)
-
-                        llm_logger = logging.getLogger("llm_trace")
-                        llm_logger.info("[LLM INPUT] %s", raw_body)
-
-                        messages = data.get("messages", [])
-                        user_text = (
-                            messages[-1].get("content", "").strip() if messages else ""
-                        )
-
-                        if not user_text:
-                            error_payload = (
-                                {
-                                    "error": {
-                                        "message": "Texto ou mensagens ausentes.",
-                                        "type": "invalid_request_error",
-                                    }
-                                }
-                                if "v1" in self.path
-                                else {"ok": False, "error": "Texto ausente."}
-                            )
-                            self.send_json(400, error_payload)
-                            return
-
-                        is_stream = data.get("stream", False)
-                        model_name = data.get("model", "gemini-local")
-                        chunk_id = f"chatcmpl-{int(time.time())}"
-
-                        if is_stream:
-                            self.send_response(200)
-                            self.send_header(
-                                "Content-Type", "text/event-stream; charset=utf-8"
-                            )
-                            self.send_header("Cache-Control", "no-cache")
-                            self.send_header("Connection", "keep-alive")
-                            self.end_headers()
-
-                            full_response = ""
-                            try:
-                                for (
-                                    chunk_text
-                                ) in BUFFER_MANAGER.agent_manager.process_stream(
-                                    user_text
-                                ):
-                                    if not chunk_text:
-                                        continue
-                                    full_response += chunk_text
-
-                                    chunk_payload = {
-                                        "id": chunk_id,
-                                        "object": "chat.completion.chunk",
-                                        "created": int(time.time()),
-                                        "model": model_name,
-                                        "choices": [
-                                            {
-                                                "index": 0,
-                                                "delta": {"content": chunk_text},
-                                                "finish_reason": None,
-                                            }
-                                        ],
-                                    }
-                                    self.wfile.write(
-                                        f"data: {json.dumps(chunk_payload, ensure_ascii=False)}\n\n".encode(
-                                            "utf-8"
-                                        )
-                                    )
-                                    self.wfile.flush()
-                            except Exception as ex:
-                                error_chunk = f"Erro no stream do agente: {ex}"
-                                full_response += error_chunk
-
-                            # Encerramento do stream
-                            end_payload = {
-                                "id": chunk_id,
-                                "object": "chat.completion.chunk",
-                                "created": int(time.time()),
-                                "model": model_name,
-                                "choices": [
-                                    {"index": 0, "delta": {}, "finish_reason": "stop"}
-                                ],
-                            }
-                            self.wfile.write(
-                                f"data: {json.dumps(end_payload, ensure_ascii=False)}\n\n".encode(
-                                    "utf-8"
-                                )
-                            )
-                            self.wfile.write(b"data: [DONE]\n\n")
-                            self.wfile.flush()
-
-                            llm_logger.info(
-                                "[LLM OUTPUT STREAM] Resposta enviada com sucesso: %s",
-                                full_response,
-                            )
-
-                        else:
-                            try:
-                                agent_response = BUFFER_MANAGER.agent_manager.process(
-                                    user_text
-                                )
-                            except Exception as ex:
-                                agent_response = f"Erro ao executar agente: {ex}"
-
-                            response_payload = {
-                                "id": chunk_id,
-                                "object": "chat.completion",
-                                "created": int(time.time()),
-                                "model": model_name,
-                                "choices": [
-                                    {
-                                        "index": 0,
-                                        "message": {
-                                            "role": "assistant",
-                                            "content": agent_response,
-                                        },
-                                        "finish_reason": "stop",
-                                    }
-                                ],
-                            }
-                            llm_logger.info(
-                                "[LLM OUTPUT] %s",
-                                json.dumps(response_payload, ensure_ascii=False),
-                            )
-                            self.send_json(200, response_payload)
-
-                    except Exception as e:
-                        logging.error("[HTTP ERRO]: %s", e)
-                        self.send_json(500, {"ok": False, "error": str(e)})
+                    self._chat_completion(body)
                     return
 
             # ======================================================================
