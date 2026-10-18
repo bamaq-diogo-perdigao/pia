@@ -229,6 +229,55 @@ class TimingTests(unittest.TestCase):
             manager.transcribe_request(b"audio")["segments"], transcript()["segments"]
         )
 
+    def test_large_groq_upload_skips_without_cooldown(self):
+        manager = self.manager(('groq', 'local'))
+        with patch.dict(hybrid.os.environ, {'STT_GROQ_MAX_UPLOAD_BYTES': '25000000'}):
+            with patch.object(local.STTManager, 'transcribe_request', return_value=transcript()):
+                result = manager.transcribe_request(b'x' * 25000001, require_timestamps=True)
+        self.assertEqual(result['provider'], 'local')
+        manager._transcribe_groq_litellm.assert_not_called()
+        manager._disable_provider_temporarily.assert_not_called()
+        manager._transcribe_groq_litellm.reset_mock()
+        manager.transcribe_request(b'small', require_timestamps=True)
+        manager._transcribe_groq_litellm.assert_called_once()
+
+    def test_groq_adapter_checks_size_before_import_or_upload(self):
+        with patch.dict(hybrid.os.environ, {'STT_GROQ_MAX_UPLOAD_BYTES': '10'}):
+            with self.assertRaisesRegex(hybrid.RemoteSTTUnavailable, 'limite'):
+                hybrid.STTManager._transcribe_groq_litellm(self.manager(), b'x' * 11)
+
+    def test_local_progress_finishes_and_reports_original_time(self):
+        agent = voice.VoiceAgent.__new__(voice.VoiceAgent)
+        agent.model = Mock()
+        agent.model.transcribe.return_value = (
+            iter(types.SimpleNamespace(**segment) for segment in transcript()['segments']),
+            types.SimpleNamespace(duration=105, language='pt'),
+        )
+        logger = Mock()
+        with patch.object(voice, 'logger_stt', logger), patch.object(voice.time, 'monotonic', side_effect=[0, 1, 2, 3, 4]):
+            agent.transcribe_chunk(b'audio', return_metadata=True)
+        events = [json.loads(call.args[1]) for call in logger.info.call_args_list if call.args[0] == '[STT_PROGRESS] %s']
+        self.assertEqual(events[0]['state'], 'preparing')
+        self.assertEqual(events[-1]['state'], 'completed')
+        self.assertEqual(events[-1]['processed'], 105)
+        self.assertTrue(any(event['processed'] == 94.2 for event in events))
+
+    def test_launcher_progress_partial_lines_and_failure(self):
+        tree = ast.parse((ROOT / 'pia_launcher.py').read_text(encoding='utf-8'))
+        viewer_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'LogViewer')
+        namespace = {'Path': Path, 'json': json}
+        exec(compile(ast.Module(body=[viewer_class], type_ignores=[]), 'pia_launcher.py', 'exec'), namespace)
+        viewer = namespace['LogViewer'].__new__(namespace['LogViewer'])
+        info = {'progress_bar': Mock(), 'progress_label': Mock()}
+        viewer.update_stt_progress(info, '[STT_PROGRESS] {"state":"transcribing","processed":60,')
+        info['progress_label'].configure.assert_not_called()
+        viewer.update_stt_progress(info, '"duration":120,"percent":50}\n')
+        self.assertIn('50.0%', info['progress_label'].configure.call_args.kwargs['text'])
+        viewer.update_stt_progress(info, '[STT_PROGRESS] {"state":"completed"}\n')
+        self.assertIn('100%', info['progress_label'].configure.call_args.kwargs['text'])
+        viewer.update_stt_progress(info, '[STT_PROGRESS] {"state":"error"}\n')
+        self.assertIn('falha', info['progress_label'].configure.call_args.kwargs['text'])
+
 
 class HTTPTests(unittest.TestCase):
     @classmethod

@@ -592,3 +592,11 @@ A aplicação foi estruturada para manter modelos pesados em workers/processos s
 - Mantenha `.env` fora do Git.
 - Se expuser `HOST=0.0.0.0`, configure `OPENAI_COMPAT_API_KEY` e proteja a rede.
 - O fallback local permite continuar usando STT e chat sem depender exclusivamente de APIs externas, desde que os modelos locais necessários estejam instalados.
+
+### Progresso de transcrição local
+
+A aba `stt` do visualizador mostra preparação e progresso de arquivos transcritos pelo Whisper local. O percentual acompanha os segmentos na linha do tempo original; pode avançar em saltos nos silêncios removidos pelo VAD. O estado 100% só aparece após concluir a iteração dos segmentos. O limite `STT_GROQ_MAX_UPLOAD_BYTES=25000000` evita uploads acima de 25 MB ao Groq e passa ao próximo provedor sem aplicar cooldown ao Groq. Reinicie servidor e visualizador após atualizar; executáveis empacotados do launcher precisam ser reconstruídos.
+
+### Whisper local na GPU
+
+Para uma NVIDIA com bibliotecas CUDA/cuDNN compatíveis, use `STT_DEVICE=cuda` e `STT_COMPUTE_TYPE=float16` no `.env`. A instalação local com RTX 3080 de 10 GB foi validada com inferência CUDA real usando o modelo em cache. O log informa dispositivo e precisão efetivos. O ajuste vale para todas as transcrições do Whisper local, mantendo a ordem dos provedores e uma tarefa por worker. Reinicie a PIA para carregar a configuração; não é necessário interromper uma transcrição em andamento. Para economizar VRAM, pode-se avaliar `int8_float16`; para retornar à CPU, use `cpu` e `int8`.

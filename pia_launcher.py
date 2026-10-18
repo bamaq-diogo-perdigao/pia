@@ -1,6 +1,7 @@
 # uv run pyinstaller --onefile --noconsole --name "PIA Server Python" --icon "pia.ico" --add-data "pia.png;." pia_launcher.py
 
 import queue
+import json
 import subprocess
 import sys
 import tkinter as tk
@@ -101,11 +102,18 @@ class LogViewer:
             xscrollcommand=horizontal.set,
         )
 
-        text.grid(row=0, column=0, sticky="nsew")
-        vertical.grid(row=0, column=1, sticky="ns")
-        horizontal.grid(row=1, column=0, sticky="ew")
+        if log_file.stem.lower() == 'stt':
+            progress_frame = ttk.Frame(frame)
+            progress_frame.grid(row=0, column=0, columnspan=2, sticky='ew', padx=10, pady=8)
+            progress_label = ttk.Label(progress_frame, text='Transcrição local: aguardando')
+            progress_label.pack(anchor='w')
+            progress_bar = ttk.Progressbar(progress_frame, maximum=100, mode='determinate')
+            progress_bar.pack(fill='x', pady=(4, 0))
+        text.grid(row=1, column=0, sticky="nsew")
+        vertical.grid(row=1, column=1, sticky="ns")
+        horizontal.grid(row=2, column=0, sticky="ew")
 
-        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
         frame.grid_columnconfigure(0, weight=1)
 
         self.notebook.add(frame, text=log_file.stem)
@@ -116,6 +124,8 @@ class LogViewer:
             "frame": frame,
         }
 
+        if log_file.stem.lower() == 'stt':
+            self.tabs[log_file.name].update(progress_label=progress_label, progress_bar=progress_bar, progress_buffer='')
         self.positions[log_file.name] = 0
 
         self.load_initial_content(log_file.name)
@@ -134,6 +144,7 @@ class LogViewer:
                 content = file.read()
 
                 text.insert("end", content)
+                self.update_stt_progress(info, content)
                 text.see("end")
 
                 self.positions[filename] = file.tell()
@@ -171,6 +182,7 @@ class LogViewer:
                         should_scroll = text.yview()[1] >= 0.98
 
                         text.insert("end", new_content)
+                        self.update_stt_progress(info, new_content)
 
                         if should_scroll:
                             text.see("end")
@@ -179,6 +191,46 @@ class LogViewer:
                 pass
 
         self.root.after(POLL_INTERVAL, self.update_logs)
+
+    def update_stt_progress(self, info, content):
+        if 'progress_bar' not in info:
+            return
+        content = info.get('progress_buffer', '') + content
+        lines = content.split('\n')
+        info['progress_buffer'] = lines.pop()
+        for line in lines:
+            if '[STT_PROGRESS] ' not in line:
+                continue
+            try:
+                data = json.loads(line.split('[STT_PROGRESS] ', 1)[1])
+                state = data['state']
+                bar = info['progress_bar']
+                bar.stop()
+                if state == 'preparing':
+                    bar.configure(mode='indeterminate', value=0)
+                    bar.start(15)
+                    label = 'Local: carregando modelo / preparando áudio...'
+                elif state == 'transcribing':
+                    percent = max(0, min(99.9, float(data['percent'])))
+                    bar.configure(mode='determinate', value=percent)
+                    processed, duration = float(data['processed']), float(data['duration'])
+                    label = f'Local: {percent:.1f}% — {self.audio_time(processed)} / {self.audio_time(duration)}'
+                elif state == 'completed':
+                    bar.configure(mode='determinate', value=100)
+                    label = 'Local: transcrição concluída — 100%'
+                elif state == 'error':
+                    bar.configure(mode='determinate')
+                    label = 'Local: falha na transcrição; consulte o log'
+                else:
+                    continue
+                info['progress_label'].configure(text=label)
+            except (ValueError, TypeError, KeyError):
+                continue
+
+    @staticmethod
+    def audio_time(seconds):
+        seconds = max(0, int(seconds))
+        return f'{seconds // 3600:02}:{seconds // 60 % 60:02}:{seconds % 60:02}'
 
     def process_commands(self):
         try:

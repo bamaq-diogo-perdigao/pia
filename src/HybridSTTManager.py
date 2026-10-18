@@ -177,6 +177,12 @@ class STTManager(LocalSTTManager):
             if not self._provider_available(provider):
                 continue
 
+            if provider == 'groq' and len(audio_bytes) > int(os.getenv('STT_GROQ_MAX_UPLOAD_BYTES', '25000000')):
+                reason = f'groq: arquivo de {len(audio_bytes)} bytes excede o limite local de upload; pulando sem enviar'
+                errors.append(reason)
+                logging.info('[STT] %s', reason)
+                continue
+
             if require_timestamps and provider == "gemini":
                 errors.append("gemini: este provider não fornece timestamps reais")
                 continue
@@ -185,6 +191,7 @@ class STTManager(LocalSTTManager):
                 self.active_provider = "local"
                 self._force_local_worker = True
                 try:
+                    logger_stt.info('[STT_PROGRESS] {"state":"preparing","processed":0,"duration":0,"percent":0}')
                     result = super().transcribe_request(
                         audio_bytes,
                         language=language,
@@ -196,8 +203,10 @@ class STTManager(LocalSTTManager):
                         if require_timestamps:
                             result = timed_result(result)
                         return result
+                    logger_stt.info('[STT_PROGRESS] {"state":"error","processed":0,"duration":0,"percent":0}')
                     errors.append("local: " + str(result.get("error")))
                 except Exception as exc:
+                    logger_stt.info('[STT_PROGRESS] {"state":"error","processed":0,"duration":0,"percent":0}')
                     errors.append(f"local: {exc}")
                 finally:
                     self._force_local_worker = False
@@ -364,6 +373,8 @@ class STTManager(LocalSTTManager):
         prompt: str | None = None,
         return_metadata: bool = False,
     ) -> str | dict:
+        if len(audio_bytes) > int(os.getenv('STT_GROQ_MAX_UPLOAD_BYTES', '25000000')):
+            raise RemoteSTTUnavailable('Arquivo excede o limite de 25 MB para upload ao Groq.')
         if not GROQ_API_KEY:
             raise RemoteSTTUnavailable("GROQ_API_KEY não configurada.")
 
