@@ -86,7 +86,7 @@ TTS_KOKORO_IDLE_TIMEOUT = _int_env("TTS_KOKORO_IDLE_TIMEOUT", 600)
 TTS_QWEN_IDLE_TIMEOUT = _int_env("TTS_QWEN_IDLE_TIMEOUT", 300)
 TTS_DEVICE = _str_env("TTS_DEVICE", "cuda")
 TTS_KOKORO_MODEL = _str_env("TTS_KOKORO_MODEL", "./cache/Kokoro-82M")
-TTS_LLM_MODEL = _str_env("TTS_LLM_MODEL", "my-agent")
+TTS_LLM_MODEL = _str_env("TTS_LLM_MODEL", "")
 
 # ============================================================
 # ICE (Image Create/Edit)
@@ -142,7 +142,9 @@ AGE_GEMINI_API_KEY = _str_env("AGE_GEMINI_API_KEY", "")
 GROQ_API_KEY = _str_env("GROQ_API_KEY", "")
 DEFAULT_LOCATION = _str_env("DEFAULT_LOCATION", "Belo Horizonte, Minas Gerais, Brasil")
 
-# Ordem explícita usada por /v1/chat/completions.
+# Política compartilhada por chamadas internas e /v1/chat/completions.
+LLM_MODEL = _str_env("LLM_MODEL", "free")
+LLM_MODEL_CATALOG = _str_env("LLM_MODEL_CATALOG", "[]")
 LLM_PROVIDERS = _list_env("LLM_PROVIDERS", "gemini,groq,local")
 LLM_REMOTE_COOLDOWN_SECONDS = _int_env("LLM_REMOTE_COOLDOWN_SECONDS", 300)
 LLM_GEMINI_MODEL = _str_env("LLM_GEMINI_MODEL", "gemini/gemini-3.5-flash")
@@ -167,9 +169,9 @@ log_dir.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-if not logger.handlers:
-    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
 
+if not logger.handlers:
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)

@@ -144,59 +144,105 @@ O Faster-Whisper é carregado em processo separado e pode ser descarregado após
 
 ## Ditado
 
-O fluxo de ditado é:
+O `STTManager` apenas transcreve e distribui texto. A decisão de inserir texto no cursor pertence à camada `LocalActions`.
+
+O fluxo usado pelo atalho de ditado é:
 
 ```text
-microfone
+Ctrl+Alt+D
+  -> POST /action/local-record {"insert_at_cursor": true}
   -> AudioRecorder
-  -> detecção de fala/silêncio
   -> STTManager
   -> Gemini / Groq / Faster-Whisper
-  -> texto
+  -> LocalActions
   -> clipboard temporário
   -> Ctrl+V na janela ativa
 ```
 
-A área de transferência anterior é restaurada depois da inserção.
+Sessões iniciadas por wake word usam a mesma gravação com `insert_at_cursor=false`, portanto a transcrição vira comando/agente e não é colada automaticamente.
 
 ---
 
 # Chat / LLM
 
-A rota `/v1/chat/completions` usa a mesma ideia de fallback ordenado:
+A política `LLM_MODEL` vale para chamadas internas e para `/v1/chat/completions` quando o cliente omite `model`. O campo `model` da requisição pode sobrescrever essa política.
 
 ```dotenv
+LLM_MODEL=free
 LLM_PROVIDERS=gemini,groq,local
-```
-
-Com essa configuração, o chat tenta Gemini, depois Groq e, por último, Ollama local.
-
-## Modelos padrão
-
-```dotenv
-LLM_GEMINI_MODEL=gemini/gemini-3.5-flash
-LLM_GROQ_MODEL=groq/openai/gpt-oss-120b
-LLM_LOCAL_MODEL=ollama/qwen3:8b
-LLM_LOCAL_API_BASE=http://localhost:11434
 LLM_REMOTE_COOLDOWN_SECONDS=300
 ```
 
-Credenciais:
+A hierarquia é cumulativa: `all` e `paid` permitem modelos pagos, gratuitos e locais; `free` permite gratuitos e locais; `local` permite apenas locais. `all` e `paid` são equivalentes enquanto o catálogo contiver essas três categorias.
 
-```dotenv
-AGE_GEMINI_API_KEY=
-GROQ_API_KEY=
+| Seletor | Modelos permitidos |
+|---|---|
+| `free` | Gratuitos e locais |
+| `all-local` | Todos os remotos configurados |
+| `+gemini=free` | Apenas Gemini gratuitos |
+| `free-local+gemini=paid` | Gratuitos remotos e Gemini pagos |
+| `all-groq` | Todos, exceto Groq |
+| `local+openrouter=free` | Locais e OpenRouter gratuitos |
+
+`+` inclui e `-` exclui, da esquerda para a direita. `provider=tier` aplica a hierarquia dentro daquele provider. Um seletor iniciado por `-` parte de todos os modelos; um iniciado por `+` parte de nenhum. As operações alteram a seleção, preservando a ordem de fallback do catálogo. Um ID exato anunciado em `/v1/models`, como `gemini/gemini-3.8-flash`, seleciona somente aquele modelo. Os aliases antigos `my-agent` e `gemini-local` usam `LLM_MODEL`.
+
+## Gemini e ordem de fallback
+
+A lista padrão, classificada como gratuita pela configuração da PIA, é:
+
+```text
+gemini-3.8-flash
+gemini-3.7-flash
+gemini-3.6-flash
+gemini-3.5-flash
+gemini-3-flash-preview
+gemini-2.5-flash
+gemini-3.5-flash-lite
+gemini-3.1-flash-lite
+gemini-2.5-flash-lite
 ```
 
-O provider Gemini também aceita `GEMINI_API_KEY` como fallback de credencial.
+Configure `LLM_GEMINI_FREE_MODELS` para substituir essa lista e `LLM_GEMINI_PAID_MODELS` para acrescentar modelos pagos (nomes separados por vírgula). Os nomes são tentados na ordem informada. Erros de quota, acesso, modelo inexistente ou conexão fazem a PIA tentar o próximo candidato. O cooldown é por provider/modelo, sem bloquear os outros Gemini. Providers sem credenciais são ignorados.
 
-O runtime não depende mais de `models.yaml` para determinar a prioridade do chat. A ordem dos providers é definida diretamente por `LLM_PROVIDERS`.
+A PIA não confirma que um modelo existe ou está disponível no nível gratuito da sua conta e não altera a configuração de faturamento do provedor. As categorias são regras locais de seleção, não limites de custo. Revise as listas conforme sua conta.
 
-## Streaming
+## Providers e catálogo
 
-`/v1/chat/completions` suporta `stream=true`.
+`LLM_PROVIDERS` define a ordem dos providers. Dentro de cada provider, a PIA tenta a lista gratuita e depois a paga, filtradas pelo seletor. O local usa `LLM_LOCAL_MODEL` (ou a lista ordenada `LLM_LOCAL_MODELS`) e `LLM_LOCAL_API_BASE` (padrões `ollama/qwen3:8b` e `http://localhost:11434`).
 
-Se um provider falhar antes de gerar o primeiro chunk, o próximo provider é tentado. Se a transmissão já começou, o servidor não reinicia a resposta em outro modelo, evitando texto duplicado no mesmo stream.
+- Gemini: `AGE_GEMINI_API_KEY`, com fallback para `GEMINI_API_KEY`.
+- Groq: `GROQ_API_KEY`; a lista gratuita usa `LLM_GROQ_FREE_MODELS` ou, se ausente, `LLM_GROQ_MODEL`. Modelos pagos: `LLM_GROQ_PAID_MODELS`.
+- OpenRouter: acrescente `openrouter` a `LLM_PROVIDERS`, configure `OPENROUTER_API_KEY`, `LLM_OPENROUTER_FREE_MODELS` e/ou `LLM_OPENROUTER_PAID_MODELS`.
+- Cloudflare: acrescente `cloudflare` a `LLM_PROVIDERS`, configure `CLOUDFLARE_API_KEY`, `LLM_CLOUDFLARE_API_BASE` conforme sua integração e `LLM_CLOUDFLARE_FREE_MODELS` e/ou `LLM_CLOUDFLARE_PAID_MODELS`.
+
+As listas aceitam IDs LiteLLM com ou sem o prefixo do provider. Não há modelos OpenRouter/Cloudflare habilitados por padrão. Use as categorias conforme o plano da sua conta. `LLM_GEMINI_MODEL` foi substituído pelas listas Gemini.
+
+Para outras integrações, `LLM_MODEL_CATALOG` aceita uma lista JSON de entradas adicionais, sem chaves secretas:
+
+```dotenv
+LLM_MODEL_CATALOG='[{"provider":"custom","model":"openai/my-model","tier":"paid","api_key_env":"CUSTOM_API_KEY","api_base_env":"CUSTOM_API_BASE"}]'
+```
+
+`model` deve ser um ID aceito pelo LiteLLM; `api_key_env` e `api_base_env` são nomes de variáveis de ambiente. As entradas adicionais ficam após as listas padrão. O seletor também aceita `+custom=paid` e `-custom`.
+
+`GET /v1/models` anuncia `all`, `paid`, `free`, `local` e os IDs configurados, além dos modelos de áudio/imagens. Essa listagem representa o catálogo, não uma verificação de credenciais. As políticas LLM se aplicam ao chat e às chamadas de chat internas (inclusive classificação de vozes via `TTS_LLM_MODEL`); os IDs dos endpoints de STT, síntese e imagens continuam específicos de cada modalidade.
+
+## API e streaming
+
+```json
+{
+  "model": "free-local+gemini=paid",
+  "messages": [
+    {"role": "system", "content": "Responda em português."},
+    {"role": "user", "content": "Olá!"}
+  ],
+  "stream": false
+}
+```
+
+A API preserva o histórico de mensagens, ferramentas e opções como `temperature`, `max_tokens` e `response_format`; responde com o modelo realmente usado. Seletores inválidos retornam HTTP 400; esgotamento dos candidatos retorna HTTP 503, sem apresentar erro como resposta de sucesso.
+
+Com `stream=true`, há fallback se a falha ocorrer antes de qualquer conteúdo ou chamada de ferramenta. Depois que a resposta começa, a PIA não a reinicia em outro modelo. Falhas posteriores são sinalizadas como erro SSE, encerrando com `[DONE]`.
 
 ---
 
@@ -325,14 +371,41 @@ Rotas disponíveis:
 
 `/v1/audio/translations` e `/v1/audio/voice_consents` existem apenas como respostas explícitas de não implementação.
 
-## STT
+## Local Actions
 
 | Método | Endpoint | Função |
 |---|---|---|
-| GET | `/stt/start` | Inicia gravação |
-| GET | `/stt/stop` | Para gravação |
-| GET | `/stt/status` | Estado e textos pendentes |
-| GET | `/stt/status/stream` | Stream SSE de transcrições |
+| POST | `/action/text-at-cursor` | Insere texto ou imagem no controle atualmente focado |
+| GET | `/action/text-at-cursor` | Seleciona/copia e retorna o texto do controle focado |
+| DELETE | `/action/text-at-cursor` | Seleciona e remove todo o conteúdo do controle focado |
+| GET | `/action/screen` | Retorna PNG do monitor onde está o cursor do mouse |
+| GET | `/action/screen-all` | Retorna PNG contendo todos os monitores |
+| POST | `/action/local-record` | Inicia gravação STT; aceita `{"insert_at_cursor": true|false}` |
+| DELETE | `/action/local-record` | Encerra a gravação STT |
+| GET | `/action/local-record` | Retorna status e textos pendentes |
+| GET | `/action/local-record/stream` | Stream SSE de transcrições |
+| POST | `/action/play-audio` | Reproduz áudio imediatamente em canal independente; chamadas podem sobrepor |
+| DELETE | `/action/play-audio` | Para um áudio imediato por `id`; sem `id`, para todos os imediatos |
+| POST | `/action/play-audio-queue` | Enfileira áudio para reprodução estritamente sequencial |
+| DELETE | `/action/play-audio-queue` | Para o atual e limpa a fila; com `{"next": true}`, apenas pula o atual |
+| POST | `/action/image` | Salva a imagem recebida e abre no navegador padrão |
+
+`/action/text-at-cursor` aceita JSON com `text`, JSON com imagem em data URL, `text/plain`, `image/*` ou multipart. As rotas de áudio aceitam conteúdo bruto ou multipart. `POST /action/play-audio` também aceita JSON como `{"path":"D:\\\\codes\\\\pia\\\\sounds\\\\end.mp3"}` para tocar um arquivo absoluto do Windows. A fila e os áudios imediatos usam canais independentes.
+
+## Storytelling
+
+`POST /tts/storytelling` aceita o modo opcional:
+
+```json
+{
+  "text": "[Ayla] \"Olá.\" O vento sopra.",
+  "kokoro": "only"
+}
+```
+
+Com `kokoro: "only"`, todos os trechos são processados pelo Kokoro: narração usa `pm_santa`, falas femininas usam `pf_dora` e falas masculinas ou de gênero desconhecido usam `pm_alex`. Sem esse parâmetro, o storytelling mantém a seleção normal de vozes/personagens.
+
+O userscript `Plugins/isekai0.js` possui toggles para TTS, Kokoro-only e STT. O STT sempre inicia desligado ao carregar a página e só mantém a gravação aberta enquanto existe uma `textarea` visível. As transcrições são inseridas diretamente no campo; a sentença isolada `enviar` simula `Shift+Enter`.
 
 ## TTS
 
@@ -377,6 +450,7 @@ PIA
 ├── src/
 │   ├── HTTPServer.py
 │   ├── STTManager.py
+│   ├── LocalActions.py
 │   ├── HybridSTTManager.py
 │   ├── AudioRecorder.py
 │   ├── VoiceAgent.py

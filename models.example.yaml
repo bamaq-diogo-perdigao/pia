@@ -4,7 +4,8 @@
 # A prioridade oficial é configurada no .env:
 #
 # LLM_PROVIDERS=gemini,groq,local
-# LLM_GEMINI_MODEL=gemini/gemini-3.5-flash
+# LLM_MODEL=free
+# LLM_GEMINI_FREE_MODELS=gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite
 # LLM_GROQ_MODEL=groq/openai/gpt-oss-120b
 # LLM_LOCAL_MODEL=ollama/qwen3:8b
 #
