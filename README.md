@@ -26,7 +26,7 @@ O projeto expõe APIs compatíveis com partes da API da OpenAI para facilitar in
   - detecção local com sherpa-onnx;
   - palavra-chave configurável por arquivo.
 - **Comandos locais dinâmicos**
-  - módulos Python carregados de `src/commands/`.
+  - módulos Python carregados de `Plugins/Skills/`.
 - **Overlay/HUD**
   - estados de listening, thinking, processing, speaking e pulse.
 - **Integração Windows**
@@ -600,3 +600,7 @@ A aba `stt` do visualizador mostra preparação e progresso de arquivos transcri
 ### Whisper local na GPU
 
 Para uma NVIDIA com bibliotecas CUDA/cuDNN compatíveis, use `STT_DEVICE=cuda` e `STT_COMPUTE_TYPE=float16` no `.env`. A instalação local com RTX 3080 de 10 GB foi validada com inferência CUDA real usando o modelo em cache. O log informa dispositivo e precisão efetivos. O ajuste vale para todas as transcrições do Whisper local, mantendo a ordem dos provedores e uma tarefa por worker. Reinicie a PIA para carregar a configuração; não é necessário interromper uma transcrição em andamento. Para economizar VRAM, pode-se avaliar `int8_float16`; para retornar à CPU, use `cpu` e `int8`.
+
+## Skills de voz e plugins
+
+Os comandos agora são projetos em `Plugins/Skills`, com `plugin.toml` e uma função `execute` que recebe APIs da PIA. Leia [o guia das skills](docs/SKILLS.md) e veja [o projeto de exemplo](Plugins/Skills/exemplo/README.md). As integrações de navegador ficam em `Plugins/Browser`, incluindo o userscript IsekaiZero.

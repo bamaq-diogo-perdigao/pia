@@ -39,7 +39,7 @@ def main() -> None:
     To avoid accidental process shutdown when a background thread crashes,
     the main thread keeps running while the overlay is active.
     """
-    load_commands("commands")
+    load_commands()
 
     # Keep HTTP server in background so overlay can stay in main thread.
     http_thread = threading.Thread(target=run_http_server, daemon=True)
