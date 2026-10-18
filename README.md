@@ -109,6 +109,101 @@ A ordem é literal. Com a configuração acima:
 
 Providers remotos que falham ficam temporariamente em cooldown para evitar repetir a mesma chamada inútil em cada frase.
 
+## API de transcrição com timestamps e legendas
+
+`POST /v1/audio/transcriptions` aceita multipart (`file`) ou JSON Base64
+(`input_audio.data` e `input_audio.format`). `model=whisper-1` é um alias de
+compatibilidade: os providers são escolhidos por `STT_PROVIDERS`.
+
+Exemplo importável no Postman (no PowerShell, use `curl.exe` em uma linha):
+
+```bash
+curl --request POST 'http://127.0.0.1:8762/v1/audio/transcriptions' \
+  --header 'Authorization: Bearer local' \
+  --form 'file=@podcast.mp3' \
+  --form 'model=whisper-1' \
+  --form 'language=pt' \
+  --form 'response_format=verbose_json'
+```
+
+Para exigir esse token, configure `OPENAI_COMPAT_API_KEY=local` no servidor.
+Se a variável estiver vazia, a autenticação continua opcional. Não configure o
+header Content-Type manualmente ao enviar multipart.
+
+Contrato dos formatos:
+
+- `json` (padrão): `{"text":"..."}`, preservando os clientes existentes.
+- `text`: texto UTF-8.
+- `verbose_json`: `task`, `language`, `duration`, `text` e `segments`.
+  `duration` é a duração integral do áudio em segundos, incluindo silêncios.
+  Cada segmento contém `id` (índice a partir de zero), `start`, `end` e `text`.
+  Os tempos são segundos relativos ao início do arquivo enviado, sem remover pausas.
+  Não há timestamps por palavra neste contrato.
+- `srt`: legendas UTF-8, MIME `application/x-subrip`, tempos `HH:MM:SS,mmm`.
+- `vtt`: legendas UTF-8, MIME `text/vtt`, cabeçalho `WEBVTT` e tempos `HH:MM:SS.mmm`.
+  Ambos usam os mesmos segmentos do `verbose_json`, arredondados a milissegundos.
+
+Exemplo ilustrativo de resposta:
+
+```json
+{
+  "task": "transcribe",
+  "language": "pt",
+  "duration": 105.0,
+  "text": "Primeira fala. Segunda fala.",
+  "segments": [
+    {"id": 0, "start": 2.25, "end": 3.5, "text": "Primeira fala."},
+    {"id": 1, "start": 93.1, "end": 94.2, "text": "Segunda fala."}
+  ]
+}
+```
+
+Para obter arquivos de legenda, troque `response_format` e salve a resposta:
+
+```bash
+curl 'http://127.0.0.1:8762/v1/audio/transcriptions' \
+  -H 'Authorization: Bearer local' -F 'file=@podcast.mp3' \
+  -F 'response_format=srt' --output podcast.srt
+curl 'http://127.0.0.1:8762/v1/audio/transcriptions' \
+  -H 'Authorization: Bearer local' -F 'file=@podcast.mp3' \
+  -F 'response_format=vtt' --output podcast.vtt
+```
+
+Para `verbose_json`, `srt` e `vtt`, o Gemini Live é pulado porque o adaptador
+atual só fornece texto. O Groq é solicitado com `verbose_json`, que fornece
+segmentos, e o Faster-Whisper local preserva os tempos nativos do modelo.
+Ausência de segmentos reais, falhas ou limites do provedor acionam o próximo
+provider configurado. Inclua `local` em `STT_PROVIDERS=gemini,groq,local` para
+permitir fallback em arquivos que excedem os limites remotos. Se nenhum provider
+configurado conseguir fornecer tempos reais, a rota retorna HTTP 500 com um erro
+OpenAI-compatible em `error.message`; nunca fabrica tempos para o texto.
+Áudio sem fala é válido: texto vazio, segmentos vazios e duração real; SRT vazio
+ou VTT contendo somente o cabeçalho.
+
+O arquivo inteiro é enviado ao provider, sem divisão adicional pela PIA.
+O Faster-Whisper processa janelas internas e restaura os timestamps na linha do
+tempo original após o VAD, preservando os silêncios. A PIA não concatena janelas
+sobrepostas nem deduplica frases iguais (elas podem ser repetições legítimas).
+Não é necessário recortar o áudio a cada 30 segundos no cliente.
+
+Limites e dependências:
+
+- `OPENAI_COMPAT_MAX_UPLOAD_BYTES=209715200`: 200 MiB para o **corpo HTTP inteiro**,
+  incluindo overhead multipart ou Base64; excesso retorna HTTP 413.
+- `OPENAI_COMPAT_TIMEOUT_SECONDS=180`: espera pelo worker local; aumente no `.env`
+  para podcasts longos e ajuste também os timeouts do cliente/proxy. A execução
+  local usa memória proporcional ao áudio decodificado; o limite de upload não
+  garante que qualquer duração caiba na memória disponível.
+- Não foram adicionados pacotes. O decoder PyAV de `faster-whisper` mede a duração
+  integral no caminho Groq com timestamps. O caminho local usa a duração medida
+  pelo próprio Faster-Whisper e VAD (ONNX Runtime), já presentes nas dependências.
+  O modelo local precisa estar disponível ou ser baixado no primeiro uso.
+
+Testes offline da API, providers, worker e legendas:
+`python -m unittest discover -s tests -p test_transcription.py`.
+Os providers/modelos e o desktop são substituídos por mocks; os testes HTTP usam
+um servidor real em loopback.
+
 ## Gemini STT
 
 ```dotenv

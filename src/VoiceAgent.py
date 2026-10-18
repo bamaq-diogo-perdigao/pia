@@ -50,7 +50,8 @@ class VoiceAgent:
         language: str | None = "pt",
         prompt: str | None = None,
         temperature: float | None = None,
-    ) -> str:
+        return_metadata: bool = False,
+    ) -> str | dict:
         """Transcribe an in-memory audio file.
 
         ``audio_bytes`` may contain WAV, MP3, WebM and other formats supported by
@@ -73,19 +74,24 @@ class VoiceAgent:
             "best_of": STT_BEST_OF,
             "temperature": transcription_temperature,
             "condition_on_previous_text": False,
-            "vad_filter": False,
+            "vad_filter": return_metadata,
             "vad_parameters": {"min_silence_duration_ms": 500},
         }
 
         if prompt:
             transcribe_kwargs["initial_prompt"] = prompt
 
-        segments, _ = self.model.transcribe(audio_stream, **transcribe_kwargs)
+        segments, info = self.model.transcribe(audio_stream, **transcribe_kwargs)
 
-        text = [segment.text for segment in segments]
-        res = " ".join(text).strip()
+        segments = [{"id": i, "start": float(segment.start), "end": float(segment.end),
+                     "text": segment.text.strip()}
+                    for i, segment in enumerate(segments) if segment.text.strip()]
+        res = " ".join(segment["text"] for segment in segments).strip()
 
         if res:
             logger_stt.info(res)
 
+        if return_metadata:
+            return {"text": res, "segments": segments, "duration": float(info.duration),
+                    "language": info.language}
         return res
