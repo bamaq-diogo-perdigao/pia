@@ -2,7 +2,7 @@
 
 PIA é um assistente pessoal multimodal para Windows que reúne, em um único servidor Python, **Speech-to-Text (STT)**, **Text-to-Speech (TTS)**, **chat/LLM**, **geração e edição de imagens**, **wake word**, comandos locais e uma interface visual de estado.
 
-O projeto expõe APIs compatíveis com partes da API da OpenAI para facilitar integração com clientes como Open WebUI, scripts locais, AutoHotkey e outras aplicações.
+O projeto expõe APIs compatíveis com partes da API da OpenAI para facilitar integração com clientes como Open WebUI, scripts locais e outras aplicações.
 
 ![PIA](./pia.png)
 
@@ -29,19 +29,18 @@ O projeto expõe APIs compatíveis com partes da API da OpenAI para facilitar in
   - módulos Python carregados de `Plugins/Skills/`.
 - **Overlay/HUD**
   - estados de listening, thinking, processing, speaking e pulse.
-- **Integração Windows**
+- **Atalhos globais**
+  - os mesmos comandos no Windows e no Linux, configurados em `shortcuts.yaml`;
   - inserção de texto no cursor;
-  - AutoHotkey;
-  - launcher com visualização dos logs.
+  - launcher com ícone na bandeja e visualização dos logs.
 
 ---
 
 ## Requisitos
 
-- Windows;
+- Windows ou Linux;
 - Python 3.12;
 - [uv](https://docs.astral.sh/uv/);
-- AutoHotkey v2 para os atalhos;
 - SoX para partes do pipeline de áudio;
 - Ollama apenas se o fallback LLM local for utilizado;
 - ComfyUI apenas se os endpoints de imagem forem utilizados;
@@ -68,11 +67,33 @@ uv sync
 Copy-Item .env.example .env
 ```
 
-Para iniciar diretamente:
+A bandeja e a API sobem juntas. Não há um atalho que abra só o servidor.
+
+### Executar agora
+
+**Linux**
+
+```bash
+bash startup/piaSATServer.sh
+```
+
+**Windows**
+
+Abra `dist\PIA Server Python.exe`. Esse executável sobe a bandeja e a API. Se a pasta `dist` ainda não tiver o arquivo, gere-o na raiz do projeto:
 
 ```powershell
-uv run python -m server
+uv run pyinstaller --onefile --noconsole --name "PIA Server Python" --icon "pia.ico" --add-data "pia.png;." pia_launcher.py
 ```
+
+### Iniciar com o computador
+
+Com a PIA aberta, o menu do ícone tem o item **Inicializar**. Marcado, ela entra no próximo login. Desmarcado, não entra.
+
+Se a PIA não estiver aberta, dá para ligar ou desligar na mão:
+
+**Linux.** O login lê `~/.config/autostart/piaSAT.desktop`. Para ligar, o arquivo precisa existir, apontar para `startup/piaSATServer.sh` e conter `X-GNOME-Autostart-enabled=true`. O `install.ps1` grava isso. Para desligar, apague o arquivo ou mude essa chave para `false`.
+
+**Windows.** A pasta Inicializar do usuário (`shell:startup`) precisa ter um atalho `PIA.lnk` cujo destino é `dist\PIA Server Python.exe`. Crie esse atalho para ligar. Apague o atalho para desligar. O executável tem de existir antes.
 
 ---
 
@@ -570,11 +591,7 @@ PIA
 
 # Execução e desenvolvimento
 
-Executar servidor:
-
-```powershell
-uv run python -m server
-```
+Executar a bandeja e a API: no Linux, `bash startup/piaSATServer.sh`; no Windows, `dist\PIA Server Python.exe`. O item **Inicializar** do ícone liga ou desliga a entrada no login.
 
 Sincronizar dependências:
 
