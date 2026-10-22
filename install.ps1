@@ -54,6 +54,16 @@ if ($IsLinuxOS) {
             Write-Warning "Gerenciador de pacotes não identificado. Certifique-se de ter 'portaudio' e 'build-essential' instalados."
         }
     }
+
+    # Ícone na bandeja (pystray via AppIndicator) precisa do PyGObject e da lib AppIndicator
+    Write-Host "Instalando dependências do ícone da bandeja (AppIndicator / PyGObject)..." -ForegroundColor Yellow
+    if (Get-Command apt -ErrorAction SilentlyContinue) {
+        sudo apt install -y pkg-config libcairo2-dev libgirepository-2.0-dev gir1.2-ayatanaappindicator3-0.1 wl-clipboard
+    } elseif (Get-Command dnf -ErrorAction SilentlyContinue) {
+        sudo dnf install -y pkgconf-pkg-config cairo-devel gobject-introspection-devel libayatana-appindicator-gtk3 wl-clipboard
+    } elseif (Get-Command pacman -ErrorAction SilentlyContinue) {
+        sudo pacman -S --needed --noconfirm pkgconf cairo gobject-introspection libayatana-appindicator wl-clipboard
+    }
 }
 
 # ============================================================
@@ -91,6 +101,15 @@ if (-not (Test-Path "keywords.txt")) {
         Write-Host "Arquivo keywords.txt criado a partir do keywords.example.txt" -ForegroundColor Green
     } else {
         Write-Warning "Arquivo keywords.example.txt não encontrado."
+    }
+}
+
+if (-not (Test-Path "shortcuts.yaml")) {
+    if (Test-Path "shortcuts.example.yaml") {
+        Copy-Item "shortcuts.example.yaml" "shortcuts.yaml"
+        Write-Host "Arquivo shortcuts.yaml criado a partir do shortcuts.example.yaml" -ForegroundColor Green
+    } else {
+        Write-Warning "Arquivo shortcuts.example.yaml não encontrado."
     }
 }
 
@@ -218,51 +237,18 @@ if ($CudaHome) {
 Write-Host "--------------------------------------------------" -ForegroundColor Cyan
 
 if ($IsWindowsOS) {
-    Write-Host "Criando atalhos na pasta de Inicialização do Windows..." -ForegroundColor Yellow
-    $StartupFolder = [Environment]::GetFolderPath("Startup")
-    $WshShell = New-Object -ComObject WScript.Shell
-
-    $FilesToShortcut = @(
-        "startup\piaSATServer.vbs",
-        "startup\piaSAT.ahk"
-    )
-
-    foreach ($File in $FilesToShortcut) {
-        $SourcePath = Join-Path $Root $File
-        if (Test-Path $SourcePath) {
-            $FileName = [System.IO.Path]::GetFileNameWithoutExtension($File)
-            $ShortcutPath = Join-Path $StartupFolder "$FileName.lnk"
-
-            $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-            $Shortcut.TargetPath = $SourcePath
-            $Shortcut.WorkingDirectory = $Root
-            $Shortcut.Save()
-
-            Write-Host "Atalho criado: $ShortcutPath" -ForegroundColor Gray
-        } else {
-            Write-Warning "Arquivo não encontrado para criar atalho: $SourcePath"
-        }
+    Write-Host "Marcando a PIA para iniciar com o Windows (atalho para o .exe)..." -ForegroundColor Yellow
+    uv run python -c "import autostart, sys; sys.exit(0 if autostart.set_enabled(True) else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "A inicialização com o Windows não foi marcada. Gere dist\PIA Server Python.exe e use o item Inicializar no menu."
     }
 } elseif ($IsLinuxOS) {
-    Write-Host "Configurando autostart no Linux (~/.config/autostart)..." -ForegroundColor Yellow
-    $AutostartFolder = Join-Path $env:HOME ".config/autostart"
-    if (-not (Test-Path $AutostartFolder)) {
-        New-Item -ItemType Directory -Path $AutostartFolder -Force | Out-Null
-    }
-
-    $LinuxStartupScript = Join-Path $Root "startup/piaSATServer.sh"
-    if (Test-Path $LinuxStartupScript) {
-        $DesktopFile = Join-Path $AutostartFolder "piaSAT.desktop"
-        $DesktopContent = @"
-[Desktop Entry]
-Type=Application
-Name=PIA SAT
-Exec=bash "$LinuxStartupScript"
-WorkingDirectory=$Root
-X-GNOME-Autostart-enabled=true
-"@
-        Set-Content -Path $DesktopFile -Value $DesktopContent
-        Write-Host "Autostart do Linux criado em: $DesktopFile" -ForegroundColor Green
+    Write-Host "Marcando a PIA para iniciar com o Linux..." -ForegroundColor Yellow
+    & (Join-Path $Root ".venv/bin/python") -c "import autostart, sys; sys.exit(0 if autostart.set_enabled(True) else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Não foi possível gravar ~/.config/autostart/piaSAT.desktop."
+    } else {
+        Write-Host "Autostart gravado em ~/.config/autostart/piaSAT.desktop" -ForegroundColor Green
     }
 }
 
@@ -274,18 +260,12 @@ Write-Host "--------------------------------------------------" -ForegroundColor
 Write-Host "Iniciando os serviços do PIA SAT em segundo plano..." -ForegroundColor Yellow
 
 if ($IsWindowsOS) {
-    $FilesToStartup = @(
-        "startup\piaSATServer.vbs",
-        "startup\piaSAT.ahk"
-    )
-    foreach ($File in $FilesToStartup) {
-        $SourcePath = Join-Path $Root $File
-        if (Test-Path $SourcePath) {
-            Start-Process -FilePath $SourcePath -WorkingDirectory $Root
-            Write-Host "Serviço iniciado: $File" -ForegroundColor Cyan
-        } else {
-            Write-Warning "Arquivo não encontrado: $SourcePath"
-        }
+    $Exe = Join-Path $Root "dist\PIA Server Python.exe"
+    if (Test-Path $Exe) {
+        Start-Process -FilePath $Exe -WorkingDirectory $Root
+        Write-Host "PIA iniciada: $Exe" -ForegroundColor Cyan
+    } else {
+        Write-Warning "Executável não encontrado: $Exe"
     }
 } elseif ($IsLinuxOS) {
     $LinuxStartupScript = Join-Path $Root "startup/piaSATServer.sh"

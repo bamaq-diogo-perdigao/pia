@@ -38,7 +38,10 @@ def _setup_windows_dlls():
 
 _setup_windows_dlls()
 
-import sherpa_onnx
+try:
+    import sherpa_onnx
+except ImportError:
+    sherpa_onnx = None
 
 import logging
 import shutil
@@ -373,6 +376,13 @@ def _start_continuous_session(stream, keyword_spotter) -> None:
 # Loop principal
 # ---------------------------------------------------------------------------
 def audio_listening_loop() -> None:
+    if sherpa_onnx is None:
+        logging.error(
+            "sherpa_onnx indisponível (libonnxruntime incompatível). "
+            "A palavra de ativação fica desligada; o restante da API continua no ar."
+        )
+        return
+
     # logging.info("Verificando/Baixando modelos do sherpa_onnx...")
     _ensure_keyword_model()  # <--- Adicione esta linha aqui
 

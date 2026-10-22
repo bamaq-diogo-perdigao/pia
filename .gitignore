@@ -8,6 +8,7 @@ __pycache__
 .env
 keywords.txt
 models.yaml
+shortcuts.yaml
 uv.lock
 *.spec
 *.pyc
