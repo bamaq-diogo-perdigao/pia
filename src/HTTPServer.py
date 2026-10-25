@@ -116,6 +116,9 @@ class HTTPServer(BaseHTTPRequestHandler):
         disabled. This is convenient for a local-only service and lets Open WebUI
         use any non-empty placeholder key it requires in its settings UI.
         """
+        from src.app_access import authorized
+        if authorized(self):
+            return True
         if not OPENAI_COMPAT_API_KEY:
             return True
 
@@ -460,6 +463,9 @@ class HTTPServer(BaseHTTPRequestHandler):
         self._send(204, b"", "text/plain; charset=utf-8")
 
     def do_GET(self) -> None:
+        from src.pia.http import route as web_route
+        if web_route(self):
+            return
         path = self._path()
 
         # ======================================================================
@@ -537,6 +543,10 @@ class HTTPServer(BaseHTTPRequestHandler):
 
             if path == "/action/screen-all":
                 png = LOCAL_ACTIONS.screenshot_all()
+                try:
+                    LOCAL_ACTIONS.play_audio(path=os.path.join(os.path.dirname(__file__), 'sounds', 'print.mp3'))
+                except Exception:
+                    logging.exception('Não foi possível tocar o som da captura.')
                 self._send(200, png, "image/png")
                 return
 
@@ -637,7 +647,8 @@ class HTTPServer(BaseHTTPRequestHandler):
 
         if path == "/tts/help":
             logging.info("[GET /tts/help] Exibindo página de ajuda do TTS...")
-            help_file_path = os.path.join(os.path.dirname(__file__), "help.html")
+            from .config_paths import UI_DIR
+            help_file_path = str(UI_DIR / "help.html")
 
             if os.path.exists(help_file_path):
                 with open(help_file_path, "rb") as f:
@@ -746,6 +757,9 @@ class HTTPServer(BaseHTTPRequestHandler):
             iterator.close()
 
     def do_POST(self) -> None:
+        from src.pia.http import route as web_route
+        if web_route(self):
+            return
         try:
             path = self._path()
 

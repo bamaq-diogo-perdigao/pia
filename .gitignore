@@ -24,3 +24,16 @@ uv.lock
 !/Plugins/Skills/aprender_novo_comando/
 /Plugins/Browser/*
 !/Plugins/Browser/isekai0/
+
+/config/legacy/
+/config/*.json
+/data/
+/Plugins/Plugins/*/config.json
+/Plugins/Plugins/*/accounts.json
+/Plugins/Bot/*/config.json
+/Plugins/Apps/*/.env
+/Plugins/Apps/*/config/config.json
+/Plugins/Apps/*/secrets/
+/Plugins/Apps/*/data/
+
+/Plugins/Plugins/*/secrets/

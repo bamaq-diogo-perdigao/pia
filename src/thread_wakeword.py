@@ -85,7 +85,8 @@ KWS_TOKENS = MODEL_DIR / "tokens.txt"
 KWS_ENCODER = MODEL_DIR / "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
 KWS_DECODER = MODEL_DIR / "decoder-epoch-12-avg-2-chunk-16-left-64.onnx"
 KWS_JOINER = MODEL_DIR / "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
-KWS_KEYWORDS = BASE_DIR / "keywords.txt"
+from .config_paths import CONFIG_DIR
+KWS_KEYWORDS = CONFIG_DIR / "keywords.txt"
 KWS_REQUIRED_FILES = (
     KWS_TOKENS,
     KWS_ENCODER,
@@ -459,6 +460,19 @@ def audio_listening_loop() -> None:
 
             if detected_by_http:
                 TRIGGER_EVENT.clear()
+
+            # The desktop may own a voice session while this wake-word loop is idle.
+            # A second wake/shortcut cancels it instead of creating another dispatcher.
+            from . import state as _state
+            with _state.LOCK:
+                already_active = _state.SESSION_ACTIVE
+                if already_active and (detected_by_voice or detected_by_http):
+                    _state.SESSION_ACTIVE = False
+            if already_active and (detected_by_voice or detected_by_http):
+                from .skills_runtime import get_runtime
+                get_runtime().cancel()
+                keyword_spotter.reset_stream(kws_stream)
+                continue
 
             now = time.time()
 

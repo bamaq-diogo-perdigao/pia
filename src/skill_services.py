@@ -7,6 +7,10 @@ from urllib.parse import urlsplit
 
 
 class PiaServices:
+    def plugins(self, plugin, operation, *, account=None, **params):
+        from .resource_plugins import get_resources
+        return get_resources().call(plugin, operation, account=account, **params)
+
     def close(self):
         from . import state
         with state.LOCK:
@@ -14,7 +18,7 @@ class PiaServices:
         from .PiaOverlay import get_overlay
         overlay = get_overlay()
         if overlay:
-            overlay.skill_action_requested.emit('close', True)
+            overlay.skill_action_requested.emit('thinking', False)
 
     def speak(self, text, cancelled, *, voice=None, speed=None):
         from .HTTPServer import TTS_MANAGER
@@ -46,7 +50,9 @@ class PiaServices:
         from PIL import Image
         with Image.open(path) as img:
             img.verify()
-        os.startfile(str(path))
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         return str(path)
 
     def insert(self, text):

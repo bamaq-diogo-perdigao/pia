@@ -1,0 +1,7 @@
+id="object_storage"
+name="Object Storage"
+type="app"
+icon="folder"
+[web]
+entrypoint="index.html"
+api="web_api.py"
