@@ -9,6 +9,7 @@ import threading
 import time
 import wave
 
+from src.stt_recovery import recover_segments,find_repetition
 from .transcription import timed_result
 from .STTManager import STTManager as LocalSTTManager, SATState
 from .config import (
@@ -217,16 +218,20 @@ class STTManager(LocalSTTManager):
                 if provider == "groq":
                     result = self._transcribe_groq_litellm(
                         audio_bytes, language=language, prompt=prompt,
-                        return_metadata=require_timestamps,
+                        return_metadata=True,
                     )
                 else:
                     result = {"text": self._transcribe_remote(
                         provider, audio_bytes, language=language, prompt=prompt)}
                 if isinstance(result, str):
                     result = {"text": result}
+                if provider=='groq' and isinstance(result.get('segments'),list):
+                    result=self._recover_groq_result(audio_bytes,result,language=language,prompt=prompt)
                 if require_timestamps:
                     result = timed_result(result)
                 text = result.get("text")
+                if text and not isinstance(result.get('segments'),list) and find_repetition([{'text':text}]):
+                    raise RemoteSTTUnavailable('Repetição suspeita sem timestamps; tentando outro provider.')
                 if text:
                     logger_stt.info(text)
                 return {
@@ -365,6 +370,28 @@ class STTManager(LocalSTTManager):
 
         return ""
 
+    def _recover_groq_result(self,audio_bytes,result,*,language=None,prompt=None):
+        timed_result(result)  # Validate before regenerating text; missing timestamps are not silence.
+        samples=None
+        def retry(start,end,attempt):
+            nonlocal samples
+            if samples is None:
+                from faster_whisper.audio import decode_audio
+                samples=decode_audio(io.BytesIO(audio_bytes),sampling_rate=16000)
+            first=max(0,round(start*16000));last=min(len(samples),round(end*16000))
+            if last<=first:raise RemoteSTTUnavailable('Trecho de recuperação vazio.')
+            buffer=io.BytesIO()
+            with wave.open(buffer,'wb') as output:
+                output.setnchannels(1);output.setsampwidth(2);output.setframerate(16000)
+                output.writeframes((samples[first:last].clip(-1,1)*32767).astype('<i2').tobytes())
+            response=self._transcribe_groq_litellm(buffer.getvalue(),language=language,prompt=prompt,return_metadata=True,temperature=min(.6,(attempt-1)*.2))
+            timed_result(response)
+            return {'segments':response['segments'],'offset':first/16000}
+        def report(state,processed,duration):
+            logger_stt.info('[STT_RECOVERY] provider=groq state=%s processed=%.3f duration=%.3f',state,processed,duration)
+        segments=recover_segments(result['segments'],float(result['duration']),retry,report=report)
+        return {**result,'segments':segments,'text':' '.join(s['text'] for s in segments)}
+
     def _transcribe_groq_litellm(
         self,
         audio_bytes: bytes,
@@ -372,6 +399,7 @@ class STTManager(LocalSTTManager):
         language: str | None = None,
         prompt: str | None = None,
         return_metadata: bool = False,
+        temperature: float | None = None,
     ) -> str | dict:
         if len(audio_bytes) > int(os.getenv('STT_GROQ_MAX_UPLOAD_BYTES', '25000000')):
             raise RemoteSTTUnavailable('Arquivo excede o limite de 25 MB para upload ao Groq.')
@@ -394,6 +422,8 @@ class STTManager(LocalSTTManager):
                     "file": audio_file,
                     "api_key": GROQ_API_KEY,
                 }
+                if temperature is not None:
+                    kwargs["temperature"]=temperature
                 if return_metadata:
                     kwargs["response_format"] = "verbose_json"
                 if language:

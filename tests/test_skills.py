@@ -141,6 +141,15 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(host.activate.call_args.args[0], 'previsao do tempo')
         fallback.assert_not_called()
 
+    def test_app_voice_commands_load_from_the_app_folder(self):
+        loader = self.load_loader()
+        loader.load_commands()
+        self.assertIn('podcast', loader.COMMAND_ACTIONS)
+        callback = loader.COMMAND_ACTIONS['podcast']
+        module = sys.modules[callback.__module__]
+        self.assertEqual(module.project_path(), ROOT / 'Plugins/Apps/podcast_automation')
+        self.assertFalse((ROOT / 'Plugins/Skills/podcast_automation').exists())
+
     def test_disabled_and_invalid_projects_do_not_break_other_skills(self):
         loader = self.load_loader()
         with tempfile.TemporaryDirectory() as directory:

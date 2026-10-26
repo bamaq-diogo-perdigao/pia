@@ -82,6 +82,11 @@ class SkillSession:
         if not self.cancelled.is_set():
             return self.runtime.services.insert(text)
 
+    def plugins(self, plugin, operation, *, account=None, **params):
+        if self.cancelled.is_set():
+            raise RuntimeError('Skill cancelada.')
+        return self.runtime.services.plugins(plugin, operation, account=account, **params)
+
     def key(self, *keys):
         if not self.cancelled.is_set():
             return self.runtime.services.key(*keys)
@@ -95,7 +100,7 @@ class SkillSession:
     def call(self, execute):
         apis = dict(piaClose=self.close, piaSTT=self.stt, piaTTS=self.tts,
                     piaInterface=self.interface, piaView=self.view, piaInsert=self.insert,
-                    piaKey=self.key, piaCancelled=self.cancelled)
+                    piaKey=self.key, piaCancelled=self.cancelled, piaPlugins=self.plugins)
         try:
             signature = inspect.signature(execute)
             kwargs = apis if any(p.kind == p.VAR_KEYWORD for p in signature.parameters.values()) else {

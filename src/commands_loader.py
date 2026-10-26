@@ -13,6 +13,7 @@ from .state import COMMAND_ACTIONS
 from .skills_runtime import get_runtime, normalize
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1] / 'Plugins' / 'Skills'
+APP_ROOT = Path(__file__).resolve().parents[1] / 'Plugins' / 'Apps'
 _loaded_packages = set()
 
 
@@ -23,11 +24,17 @@ def load_commands(folder_name=None):
         if any(name == prefix or name.startswith(prefix + '.') for prefix in _loaded_packages):
             sys.modules.pop(name, None)
     _loaded_packages.clear()
-    for manifest in sorted(PLUGIN_ROOT.glob('*/plugin.toml')):
+    manifests = [(path, False) for path in sorted(PLUGIN_ROOT.glob('*/plugin.toml'))]
+    manifests += [(path, True) for path in sorted(APP_ROOT.glob('*/plugin.toml'))]
+    for manifest, is_app in manifests:
         try:
             data = tomllib.loads(manifest.read_text(encoding='utf-8'))
             if not data.get('enabled', True):
                 continue
+            if is_app:
+                if not data.get('voice', {}).get('enabled', True) or not data.get('voice'):
+                    continue
+                data = {**data['voice'], 'id': data['id']}
             plugin_id = data['id']
             if not re.fullmatch(r'[a-z][a-z0-9_]*', plugin_id):
                 raise ValueError('id inválido: use letras minúsculas, números e underscore')
@@ -44,7 +51,7 @@ def load_commands(folder_name=None):
             if package_name in _loaded_packages:
                 raise ValueError('id de skill duplicado')
             package = types.ModuleType(package_name)
-            package.__path__ = [str(manifest.parent)]
+            package.__path__ = [str(entry.parent)]
             sys.modules[package_name] = package
             _loaded_packages.add(package_name)
             spec = importlib.util.spec_from_file_location(package_name + '.plugin', entry)

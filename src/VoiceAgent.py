@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 import warnings
 from pathlib import Path
+
+from src.stt_recovery import recover_segments,segment_dict
 
 from faster_whisper import WhisperModel, download_model
 
@@ -77,6 +80,7 @@ class VoiceAgent:
             "temperature": transcription_temperature,
             "condition_on_previous_text": False,
             "vad_filter": return_metadata,
+            "word_timestamps": return_metadata,
             "vad_parameters": {"min_silence_duration_ms": 500},
         }
 
@@ -96,13 +100,30 @@ class VoiceAgent:
             segments, info = self.model.transcribe(audio_stream, **transcribe_kwargs)
             report('transcribing', 0, float(info.duration))
             last_report = time.monotonic()
-            for i, segment in enumerate(segments):
-                if segment.text.strip():
-                    normalized.append({'id': i, 'start': float(segment.start),
-                                       'end': float(segment.end), 'text': segment.text.strip()})
-                if time.monotonic() - last_report >= 1:
-                    report('transcribing', float(segment.end), float(info.duration))
-                    last_report = time.monotonic()
+            def initial():
+                nonlocal last_report
+                try:
+                    for segment in segments:
+                        if time.monotonic()-last_report>=1:
+                            report('transcribing',float(segment.end),float(info.duration))
+                            last_report=time.monotonic()
+                        yield segment_dict(segment)
+                finally:
+                    if hasattr(segments,'close'):segments.close()
+            samples=None
+            def retry(start,end,attempt):
+                nonlocal samples
+                if samples is None:
+                    from faster_whisper.audio import decode_audio
+                    samples=decode_audio(io.BytesIO(audio_bytes),sampling_rate=16000)
+                first=max(0,round(start*16000));last=min(len(samples),round(end*16000))
+                if last<=first:raise RuntimeError('Trecho de recuperação STT vazio.')
+                settings={**transcribe_kwargs,'language':language or info.language,'condition_on_previous_text':False,'vad_filter':True,'word_timestamps':True,
+                          'temperature':min(.6,(attempt-1)*.2),'repetition_penalty':1.05,'hallucination_silence_threshold':2.0}
+                # Never feed the generated/repeating transcript back as a prompt.
+                result,_=self.model.transcribe(samples[first:last],**settings)
+                return {'segments':result,'offset':first/16000}
+            normalized=recover_segments(initial(),float(info.duration),retry,report=report)
             report('completed', float(info.duration), float(info.duration))
         except Exception:
             report('error')
